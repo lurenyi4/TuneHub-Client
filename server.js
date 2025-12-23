@@ -103,20 +103,20 @@ app.get('/api/proxy/url', async (req, res) => {
         res.set('X-Source-Switch', sourceSwitch);
       }
       
-      // 使用流式代理并保存（边下边播）
-      // 计算保存路径
-      let savePath = null;
+      // 触发后台下载
       if (songInfo) {
-        savePath = storageUtils.getSongStoragePath(
+        storageUtils.ensureSongCached(
           source, 
           songInfo.artist || '未知歌手', 
           songInfo.album || '未知专辑', 
           songInfo.name || '未知歌曲', 
-          quality
-        );
+          quality,
+          location
+        ).catch(err => console.error('后台下载触发失败:', err.message));
       }
       
-      await storageUtils.streamAndSaveSong(req, res, location, savePath);
+      // 流式代理
+      await storageUtils.streamAndSaveSong(req, res, location, null);
     } else {
       res.json(response.data);
     }
@@ -130,27 +130,27 @@ app.get('/api/proxy/url', async (req, res) => {
         res.set('X-Source-Switch', sourceSwitch);
       }
       
-      // 尝试获取歌曲信息以计算保存路径
-      let savePath = null;
+      // 尝试获取歌曲信息并触发后台下载
       try {
         const infoResponse = await axios.get(`${API_BASE_URL}/api/`, {
           params: { source: req.query.source, id: req.query.id, type: 'info' }
         });
         if (infoResponse.data && infoResponse.data.code === 200 && infoResponse.data.data) {
           const songInfo = infoResponse.data.data;
-          savePath = storageUtils.getSongStoragePath(
+          storageUtils.ensureSongCached(
             req.query.source, 
             songInfo.artist || '未知歌手', 
             songInfo.album || '未知专辑', 
             songInfo.name || '未知歌曲', 
-            quality
-          );
+            quality,
+            location
+          ).catch(err => console.error('后台下载触发失败:', err.message));
         }
       } catch (err) {
         console.error('获取歌曲信息失败:', err.message);
       }
       
-      await storageUtils.streamAndSaveSong(req, res, location, savePath);
+      await storageUtils.streamAndSaveSong(req, res, location, null);
     } else {
       res.status(500).json({ 
         code: 500, 

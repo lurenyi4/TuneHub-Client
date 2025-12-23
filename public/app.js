@@ -401,10 +401,16 @@ loadPlaylistBtn.addEventListener('click', async () => {
             savePlaylistHistory(playlistPlatform.value, id, playlistName, playlistAuthor);
             
             if (data.data.info) {
+                const info = data.data.info;
                 playlistInfo.innerHTML = `
-                    <div class="success">
-                        <h3>${escapeHtml(playlistName)}</h3>
-                        <p>创建者: ${escapeHtml(playlistAuthor)}</p>
+                    <div class="success" style="display: flex; gap: 20px; align-items: flex-start;">
+                        ${info.pic ? `<img src="${info.pic}" style="width: 120px; height: 120px; border-radius: 10px; object-fit: cover;">` : ''}
+                        <div>
+                            <h3>${escapeHtml(playlistName)}</h3>
+                            <p>创建者: ${escapeHtml(playlistAuthor)}</p>
+                            ${info.desc ? `<p style="margin-top: 10px; font-size: 0.9em; color: #666; max-height: 60px; overflow: hidden;">${escapeHtml(info.desc)}</p>` : ''}
+                            <p style="margin-top: 5px; font-size: 0.8em; color: #999;">共 ${data.data.list ? data.data.list.length : 0} 首歌曲</p>
+                        </div>
                     </div>
                 `;
             }
@@ -443,11 +449,13 @@ loadPlaylistBtn.addEventListener('click', async () => {
                 
                 playlistResults.innerHTML = data.data.list.map(song => {
                     const songName = escapeHtml(song.name);
+                    const artist = escapeHtml(song.artist || '未知');
                     return `
-                    <div class="song-card" data-platform="${playlistPlatform.value}" data-id="${song.id}" data-name="${songName}" data-artist="">
+                    <div class="song-card" data-platform="${playlistPlatform.value}" data-id="${song.id}" data-name="${songName}" data-artist="${artist}">
                         <h3>${songName}</h3>
+                        <p>歌手: <span class="clickable-text" data-keyword="${artist}">${artist}</span></p>
                         <p>可用音质: ${song.types ? song.types.join(', ') : '未知'}</p>
-                        <button class="add-to-queue-btn" data-platform="${playlistPlatform.value}" data-id="${song.id}" data-name="${songName}" data-artist="" title="添加到队列">+</button>
+                        <button class="add-to-queue-btn" data-platform="${playlistPlatform.value}" data-id="${song.id}" data-name="${songName}" data-artist="${artist}" title="添加到队列">+</button>
                     </div>
                 `;
                 }).join('');
@@ -552,6 +560,57 @@ const playerLyricsBtn = document.getElementById('player-lyrics-btn');
 const playerLyricsPanel = document.getElementById('player-lyrics-panel');
 const playerLyricsDisplay = document.getElementById('player-lyrics-display');
 const closeLyricsBtn = document.getElementById('close-lyrics-btn');
+const progressBar = document.getElementById('progress-bar');
+const currentTimeDisplay = document.getElementById('current-time');
+const totalDurationDisplay = document.getElementById('total-duration');
+const scrollingLyrics = document.getElementById('scrolling-lyrics');
+
+let isDraggingProgress = false;
+
+// 格式化时间
+function formatTime(seconds) {
+    if (isNaN(seconds)) return '00:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+// 进度条控制
+if (progressBar) {
+    progressBar.addEventListener('input', (e) => {
+        isDraggingProgress = true;
+        const time = parseFloat(e.target.value);
+        currentTimeDisplay.textContent = formatTime(time);
+    });
+
+    progressBar.addEventListener('change', (e) => {
+        isDraggingProgress = false;
+        const time = parseFloat(e.target.value);
+        bottomAudioPlayer.currentTime = time;
+    });
+}
+
+bottomAudioPlayer.addEventListener('timeupdate', () => {
+    if (!isDraggingProgress) {
+        const currentTime = bottomAudioPlayer.currentTime;
+        const duration = bottomAudioPlayer.duration;
+        
+        if (!isNaN(duration)) {
+            progressBar.max = duration;
+            progressBar.value = currentTime;
+            currentTimeDisplay.textContent = formatTime(currentTime);
+            totalDurationDisplay.textContent = formatTime(duration);
+        }
+    }
+});
+
+bottomAudioPlayer.addEventListener('loadedmetadata', () => {
+    const duration = bottomAudioPlayer.duration;
+    if (!isNaN(duration)) {
+        progressBar.max = duration;
+        totalDurationDisplay.textContent = formatTime(duration);
+    }
+});
 
 // 全屏歌词界面元素
 const fullScreenLyrics = document.getElementById('full-screen-lyrics');
@@ -1425,11 +1484,19 @@ function updateLyricsHighlight(currentTime) {
                     if (playerLyricsPanel.classList.contains('show')) {
                         scrollToActiveLyric(line, playerLyricsPanel);
                     }
+                    
+                    // 更新滚动歌词
+                    if (scrollingLyrics) {
+                        scrollingLyrics.textContent = line.textContent;
+                    }
                 }
             } else {
                 line.classList.remove('active');
             }
         });
+    } else if (scrollingLyrics && activeIndex >= 0 && lyricsData[activeIndex]) {
+        // 如果没有打开歌词面板，也要更新滚动歌词
+        scrollingLyrics.textContent = lyricsData[activeIndex].text;
     }
     
     // 更新全屏歌词高亮
@@ -1748,7 +1815,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 const artist = card.dataset.artist;
                 const path = card.dataset.path; // 本地路径
                 
-                if (platform === 'local') {
+                if (e.target.classList.contains('clickable-text')) {
+                    e.stopPropagation();
+                    const keyword = e.target.dataset.keyword;
+                    if (keyword && keyword !== '未知') {
+                        performSearch(keyword);
+                    }
+                } else if (platform === 'local') {
                     playLocalSong(id, name, artist, path);
                 }
             }
@@ -2138,8 +2211,8 @@ function displayLocalSongs(songs) {
         return `
         <div class="song-card" data-platform="local" data-id="${song.id}" data-name="${songName}" data-artist="${artist}" data-path="${escapeHtml(song.path)}">
             <h3>${songName}</h3>
-            <p>歌手: ${artist}</p>
-            <p>专辑: ${album}</p>
+            <p>歌手: <span class="clickable-text" data-keyword="${artist}">${artist}</span></p>
+            <p>专辑: <span class="clickable-text" data-keyword="${album}">${album}</span></p>
             <span class="platform-badge" style="background: #4caf50;">本地</span>
             <span class="platform-badge">${song.format}</span>
             <button class="add-to-queue-btn" data-platform="local" data-id="${song.id}" data-name="${songName}" data-artist="${artist}" title="添加到队列">+</button>

@@ -69,22 +69,24 @@ function fileExists(filePath) {
   return fs.existsSync(filePath);
 }
 
-// 下载并保存音乐文件
-async function downloadAndSaveSong(source, artist, album, songName, quality, audioUrl) {
+// 确保歌曲已缓存（后台下载）
+async function ensureSongCached(source, artist, album, songName, quality, audioUrl) {
   try {
     const filePath = getSongStoragePath(source, artist, album, songName, quality);
     const tempPath = `${filePath}.tmp`;
     
-    // 如果文件已存在，直接返回路径
+    // 如果文件已存在，直接返回
     if (fileExists(filePath)) {
-      return filePath;
+      return;
     }
     
-    // 如果临时文件已存在，说明正在下载中，直接返回（避免重复下载）
+    // 如果临时文件已存在，说明正在下载中，直接返回
     if (fileExists(tempPath)) {
       console.log(`文件正在下载中: ${tempPath}`);
-      return filePath;
+      return;
     }
+    
+    console.log(`开始后台下载歌曲: ${songName}`);
     
     // 下载文件
     const response = await axios({
@@ -99,19 +101,23 @@ async function downloadAndSaveSong(source, artist, album, songName, quality, aud
     await pipelineAsync(response.data, writer);
     
     // 下载完成后重命名
-    fs.renameSync(tempPath, filePath);
+    await fs.promises.rename(tempPath, filePath);
+    console.log(`歌曲下载完成: ${filePath}`);
     
-    return filePath;
   } catch (error) {
-    console.error('下载音乐文件失败:', error.message);
+    console.error('后台下载歌曲失败:', error.message);
     // 出错时清理临时文件
     const filePath = getSongStoragePath(source, artist, album, songName, quality);
     const tempPath = `${filePath}.tmp`;
     if (fs.existsSync(tempPath)) {
-      try { fs.unlinkSync(tempPath); } catch (e) {}
+      try { await fs.promises.unlink(tempPath); } catch (e) {}
     }
-    throw error;
   }
+}
+
+// 下载并保存音乐文件 (保留用于兼容，但建议使用 ensureSongCached)
+async function downloadAndSaveSong(source, artist, album, songName, quality, audioUrl) {
+  return ensureSongCached(source, artist, album, songName, quality, audioUrl);
 }
 
 // 下载并保存专辑封面
@@ -143,7 +149,7 @@ async function downloadAndSaveCover(source, artist, album, songName, coverUrl) {
     await pipelineAsync(response.data, writer);
     
     // 下载完成后重命名
-    fs.renameSync(tempPath, filePath);
+    await fs.promises.rename(tempPath, filePath);
     
     return filePath;
   } catch (error) {
@@ -151,7 +157,7 @@ async function downloadAndSaveCover(source, artist, album, songName, coverUrl) {
     const filePath = getCoverStoragePath(source, artist, album, songName);
     const tempPath = `${filePath}.tmp`;
     if (fs.existsSync(tempPath)) {
-      try { fs.unlinkSync(tempPath); } catch (e) {}
+      try { await fs.promises.unlink(tempPath); } catch (e) {}
     }
     throw error;
   }
@@ -209,41 +215,52 @@ function getLocalCoverPath(source, artist, album, songName) {
   return null;
 }
 
-// 扫描本地库
-function scanLibrary() {
+// 扫描本地库 (异步)
+async function scanLibrary() {
   const library = [];
   if (!fs.existsSync(STORAGE_DIR)) return library;
 
   try {
-    const platforms = fs.readdirSync(STORAGE_DIR);
-    platforms.forEach(platform => {
+    const platforms = await fs.promises.readdir(STORAGE_DIR);
+    for (const platform of platforms) {
       const platformPath = path.join(STORAGE_DIR, platform);
-      if (!fs.statSync(platformPath).isDirectory()) return;
+      const stat = await fs.promises.stat(platformPath);
+      if (!stat.isDirectory()) continue;
 
-      const artists = fs.readdirSync(platformPath);
-      artists.forEach(artist => {
+      const artists = await fs.promises.readdir(platformPath);
+      for (const artist of artists) {
         const artistPath = path.join(platformPath, artist);
-        if (!fs.statSync(artistPath).isDirectory()) return;
+        const stat = await fs.promises.stat(artistPath);
+        if (!stat.isDirectory()) continue;
 
-        const albums = fs.readdirSync(artistPath);
-        albums.forEach(album => {
+        const albums = await fs.promises.readdir(artistPath);
+        for (const album of albums) {
           const albumPath = path.join(artistPath, album);
-          if (!fs.statSync(albumPath).isDirectory()) return;
+          const stat = await fs.promises.stat(albumPath);
+          if (!stat.isDirectory()) continue;
 
-          const songs = fs.readdirSync(albumPath);
-          songs.forEach(songDirName => {
+          const songs = await fs.promises.readdir(albumPath);
+          for (const songDirName of songs) {
             const songPath = path.join(albumPath, songDirName);
-            if (!fs.statSync(songPath).isDirectory()) return;
+            const stat = await fs.promises.stat(songPath);
+            if (!stat.isDirectory()) continue;
             
-            const files = fs.readdirSync(songPath);
+            const files = await fs.promises.readdir(songPath);
             const safeSongName = sanitizeFileName(songDirName);
-            const songFile = files.find(f => f.startsWith(safeSongName) && (f.endsWith('.mp3') || f.endsWith('.flac')));
+            
+            // 优先查找匹配文件名的音频文件
+            let songFile = files.find(f => f.startsWith(safeSongName) && (f.endsWith('.mp3') || f.endsWith('.flac')));
+            
+            // 如果没找到，放宽条件，查找任意音频文件
+            if (!songFile) {
+              songFile = files.find(f => f.endsWith('.mp3') || f.endsWith('.flac'));
+            }
             
             if (songFile) {
               library.push({
                 platform,
-                artist: artist, // 保持原始目录名，前端显示时可能需要处理
-                album: album,
+                artist,
+                album,
                 name: songDirName,
                 id: `local_${platform}_${artist}_${album}_${songDirName}`,
                 hasCover: files.includes(`${safeSongName}.jpg`),
@@ -252,21 +269,20 @@ function scanLibrary() {
                 path: path.join(platform, artist, album, songDirName, songFile) // 相对路径
               });
             }
-          });
-        });
-      });
-    });
+          }
+        }
+      }
+    }
   } catch (err) {
     console.error('扫描本地库失败:', err.message);
   }
   return library;
 }
 
-// 流式代理并保存歌曲（边下边播）
+// 流式代理并保存歌曲（边下边播）- 已废弃，仅保留流式代理功能
 async function streamAndSaveSong(req, res, audioUrl, filePath) {
   // 1. 检查 Range 请求
   const range = req.headers.range;
-  const isPartial = range && !range.startsWith('bytes=0-');
   
   // 2. 请求上游音频流
   const headers = {};
@@ -293,34 +309,7 @@ async function streamAndSaveSong(req, res, audioUrl, filePath) {
     // 4. 管道传输给客户端
     response.data.pipe(res);
     
-    // 5. 保存到文件（仅当不是部分请求且响应成功时）
-    // 如果是部分请求，保存的文件可能不完整，所以跳过保存
-    if (!isPartial && response.status === 200 && filePath) {
-      const tempPath = `${filePath}.tmp`;
-      
-      // 如果临时文件已存在，说明可能有其他请求正在下载，这里就不重复下载了
-      // 但为了简单起见，我们这里还是尝试写入，或者可以加锁
-      // 考虑到 Node.js 单线程特性，如果 createWriteStream 成功，通常没问题
-      
-      const writer = fs.createWriteStream(tempPath);
-      response.data.pipe(writer);
-      
-      writer.on('finish', () => {
-        try {
-          fs.renameSync(tempPath, filePath);
-          console.log(`歌曲已流式保存: ${filePath}`);
-        } catch (err) {
-          console.error('重命名文件失败:', err.message);
-        }
-      });
-      
-      writer.on('error', (err) => {
-        console.error('保存流出错:', err.message);
-        if (fs.existsSync(tempPath)) {
-          try { fs.unlinkSync(tempPath); } catch (e) {}
-        }
-      });
-    }
+    // 注意：不再在此处保存文件，而是由 ensureSongCached 在后台处理
     
   } catch (error) {
     console.error('流式代理出错:', error.message);
@@ -343,5 +332,6 @@ module.exports = {
   getLocalCoverPath,
   scanLibrary,
   streamAndSaveSong,
+  ensureSongCached,
   STORAGE_DIR
 };
