@@ -19,6 +19,7 @@
             <button class="tab-btn" data-tab="playlist">歌单</button>
             <button class="tab-btn" data-tab="local">本地库</button>
             <button class="tab-btn" data-tab="history">播放历史</button>
+            <button class="tab-btn" data-tab="downloads">下载管理</button>
             <button class="tab-btn" data-tab="advanced">高级功能</button>
         </nav>
 
@@ -90,6 +91,19 @@
                     <button id="clear-history-btn" class="clear-btn">清空历史</button>
                 </div>
                 <div id="history-results" class="results-container"></div>
+            </div>
+        </div>
+
+        <!-- 下载管理标签页 -->
+        <div id="downloads-tab" class="tab-content">
+            <div class="section-header">
+                <h2>下载管理</h2>
+                <div class="header-actions">
+                    <button id="refresh-downloads-btn" class="secondary-btn">刷新状态</button>
+                </div>
+            </div>
+            <div id="download-tasks-container" class="download-tasks-container">
+                <div class="loading">正在获取下载任务...</div>
             </div>
         </div>
 

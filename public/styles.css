@@ -549,6 +549,116 @@ button:active {
     }
 }
 
+/* 下载管理样式 */
+.download-tasks-container {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    padding: 10px 0;
+}
+
+.download-task-item {
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 15px;
+    box-shadow: 0 4px 12px var(--shadow-color);
+    display: grid;
+    grid-template-columns: 1fr 2fr 100px;
+    align-items: center;
+    gap: 20px;
+}
+
+.task-info {
+    overflow: hidden;
+}
+
+.task-name {
+    font-weight: bold;
+    font-size: 1.1em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.task-artist {
+    font-size: 0.9em;
+    color: #666;
+    margin-top: 4px;
+}
+
+.task-progress-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.progress-bar-bg {
+    flex: 1;
+    height: 8px;
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: var(--primary-color);
+    transition: width 0.3s ease;
+}
+
+.progress-bar-fill.completed {
+    background: #4caf50;
+}
+
+.progress-bar-fill.failed {
+    background: #f44336;
+}
+
+.progress-text {
+    font-size: 0.9em;
+    min-width: 40px;
+    text-align: right;
+}
+
+.task-status {
+    font-size: 0.9em;
+    font-weight: bold;
+    text-align: center;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.task-status.pending { color: #ff9800; }
+.task-status.downloading { color: var(--primary-color); }
+.task-status.completed { color: #4caf50; }
+.task-status.failed { color: #f44336; }
+
+.task-error {
+    grid-column: 1 / -1;
+    font-size: 0.85em;
+    color: #f44336;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+    .download-task-item {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+    
+    .progress-text {
+        min-width: auto;
+    }
+    
+    .task-status {
+        text-align: left;
+        padding: 0;
+    }
+}
+
 /* Bottom Player */
 .bottom-player {
     position: fixed;

@@ -7,6 +7,19 @@ const storageUtils = require('./storage-utils');
 const historyUtils = require('./history-utils');
 const playlistHistoryUtils = require('./playlist-history-utils');
 
+// 下载任务追踪
+const downloadTasks = new Map();
+
+function updateDownloadTask(id, data) {
+  const task = downloadTasks.get(id) || { id, startTime: Date.now() };
+  downloadTasks.set(id, { ...task, ...data, lastUpdate: Date.now() });
+  
+  // 10分钟后清理已完成或失败的任务
+  if (data.status === 'completed' || data.status === 'failed') {
+    setTimeout(() => downloadTasks.delete(id), 10 * 60 * 1000);
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_BASE_URL = 'https://music-dl.sayqz.com';
@@ -18,6 +31,15 @@ app.use(express.json({ limit: '500mb' }));
 app.use(express.urlencoded({ extended: true, limit: '500mb' }));
 app.use(express.static('public'));
 app.use('/storage', express.static(storageUtils.STORAGE_DIR));
+
+// 获取下载任务列表
+app.get('/api/download/tasks', (req, res) => {
+  const tasks = Array.from(downloadTasks.values());
+  res.json({
+    code: 200,
+    data: tasks
+  });
+});
 
 // 获取本地库列表
 app.get('/api/local/library', async (req, res) => {
@@ -105,14 +127,26 @@ app.get('/api/proxy/url', async (req, res) => {
       
       // 触发后台下载
       if (songInfo) {
+        const taskId = `${source}_${id}_${quality}`;
+        updateDownloadTask(taskId, { 
+          name: songInfo.name, 
+          artist: songInfo.artist, 
+          status: 'pending', 
+          progress: 0 
+        });
+        
         storageUtils.ensureSongCached(
           source, 
           songInfo.artist || '未知歌手', 
           songInfo.album || '未知专辑', 
           songInfo.name || '未知歌曲', 
           quality,
-          location
-        ).catch(err => console.error('后台下载触发失败:', err.message));
+          location,
+          (progressData) => updateDownloadTask(taskId, progressData)
+        ).catch(err => {
+          console.error('后台下载触发失败:', err.message);
+          updateDownloadTask(taskId, { status: 'failed', error: err.message });
+        });
       }
       
       // 流式代理
@@ -137,14 +171,26 @@ app.get('/api/proxy/url', async (req, res) => {
         });
         if (infoResponse.data && infoResponse.data.code === 200 && infoResponse.data.data) {
           const songInfo = infoResponse.data.data;
+          const taskId = `${req.query.source}_${req.query.id}_${quality}`;
+          updateDownloadTask(taskId, { 
+            name: songInfo.name, 
+            artist: songInfo.artist, 
+            status: 'pending', 
+            progress: 0 
+          });
+
           storageUtils.ensureSongCached(
             req.query.source, 
             songInfo.artist || '未知歌手', 
             songInfo.album || '未知专辑', 
             songInfo.name || '未知歌曲', 
             quality,
-            location
-          ).catch(err => console.error('后台下载触发失败:', err.message));
+            location,
+            (progressData) => updateDownloadTask(taskId, progressData)
+          ).catch(err => {
+            console.error('后台下载触发失败:', err.message);
+            updateDownloadTask(taskId, { status: 'failed', error: err.message });
+          });
         }
       } catch (err) {
         console.error('获取歌曲信息失败:', err.message);
@@ -689,6 +735,19 @@ app.post('/api/playlist/save-all', async (req, res) => {
       failed: 0,
       details: []
     };
+
+    // 预注册所有任务，确保前端可见
+    songs.forEach(song => {
+      const taskId = `${source}_${song.id}_${quality}`;
+      if (!downloadTasks.has(taskId)) {
+        updateDownloadTask(taskId, {
+          name: song.name || '未知歌曲',
+          artist: song.artist || '未知歌手',
+          status: 'pending',
+          progress: 0
+        });
+      }
+    });
     
     // 批量处理歌曲（限制并发数）
     const BATCH_SIZE = 5;
@@ -724,7 +783,23 @@ app.post('/api/playlist/save-all', async (req, res) => {
             
             if (urlResponse.status === 302 || urlResponse.status === 301) {
               const audioUrl = urlResponse.headers.location;
-              await storageUtils.downloadAndSaveSong(source, artist, album, songName, quality, audioUrl);
+              const taskId = `${source}_${song.id}_${quality}`;
+              updateDownloadTask(taskId, { 
+                name: songName, 
+                artist: artist, 
+                status: 'pending', 
+                progress: 0 
+              });
+
+              await storageUtils.downloadAndSaveSong(
+                source, 
+                artist, 
+                album, 
+                songName, 
+                quality, 
+                audioUrl,
+                (progressData) => updateDownloadTask(taskId, progressData)
+              );
             }
             
             // 下载歌词

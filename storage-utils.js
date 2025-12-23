@@ -69,44 +69,69 @@ function fileExists(filePath) {
   return fs.existsSync(filePath);
 }
 
-// 确保歌曲已缓存（后台下载）
-async function ensureSongCached(source, artist, album, songName, quality, audioUrl) {
-  try {
-    const filePath = getSongStoragePath(source, artist, album, songName, quality);
-    const tempPath = `${filePath}.tmp`;
-    
-    // 如果文件已存在，直接返回
-    if (fileExists(filePath)) {
-      return;
-    }
-    
-    // 如果临时文件已存在，说明正在下载中，直接返回
-    if (fileExists(tempPath)) {
-      return;
-    }
-    
-    // 下载文件
-    const response = await axios({
-      method: 'GET',
-      url: audioUrl,
-      responseType: 'stream',
-      timeout: 120000, // 120秒超时
-    });
-    
-    // 保存到临时文件
-    const writer = fs.createWriteStream(tempPath);
-    await pipelineAsync(response.data, writer);
-    
-    // 下载完成后重命名
-    await fs.promises.rename(tempPath, filePath);
-    
-  } catch (error) {
-    console.error('后台下载歌曲失败:', error.message);
-    // 出错时清理临时文件
-    const filePath = getSongStoragePath(source, artist, album, songName, quality);
-    const tempPath = `${filePath}.tmp`;
-    if (fs.existsSync(tempPath)) {
-      try { await fs.promises.unlink(tempPath); } catch (e) {}
+// 确保歌曲已缓存（后台下载，带重试机制）
+async function ensureSongCached(source, artist, album, songName, quality, audioUrl, onProgress, retryCount = 3) {
+  const filePath = getSongStoragePath(source, artist, album, songName, quality);
+  const tempPath = `${filePath}.tmp`;
+
+  // 如果文件已存在，直接返回
+  if (fileExists(filePath)) {
+    if (onProgress) onProgress({ status: 'completed', progress: 100 });
+    return;
+  }
+
+  let lastError = null;
+  for (let attempt = 0; attempt <= retryCount; attempt++) {
+    try {
+      if (attempt > 0) {
+        console.log(`正在重试下载 (${attempt}/${retryCount}): ${songName}`);
+        if (onProgress) onProgress({ status: 'downloading', progress: 0, message: `正在重试 (${attempt}/${retryCount})...` });
+        // 指数退避等待
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+      }
+
+      // 下载文件
+      const response = await axios({
+        method: 'GET',
+        url: audioUrl,
+        responseType: 'stream',
+        timeout: 120000, // 120秒超时
+      });
+
+      const totalLength = parseInt(response.headers['content-length'], 10);
+      let downloadedLength = 0;
+      
+      // 保存到临时文件
+      const writer = fs.createWriteStream(tempPath);
+
+      response.data.on('data', (chunk) => {
+        downloadedLength += chunk.length;
+        if (onProgress && totalLength) {
+          const progress = Math.round((downloadedLength / totalLength) * 100);
+          onProgress({ status: 'downloading', progress, downloadedLength, totalLength });
+        }
+      });
+
+      await pipelineAsync(response.data, writer);
+      
+      // 下载完成后重命名
+      await fs.promises.rename(tempPath, filePath);
+      if (onProgress) onProgress({ status: 'completed', progress: 100 });
+      return; // 成功后退出循环
+      
+    } catch (error) {
+      lastError = error;
+      console.error(`下载尝试 ${attempt + 1} 失败:`, error.message);
+      
+      // 清理临时文件以便下次重试
+      if (fs.existsSync(tempPath)) {
+        try { await fs.promises.unlink(tempPath); } catch (e) {}
+      }
+
+      if (attempt === retryCount) {
+        if (onProgress) onProgress({ status: 'failed', error: lastError.message });
+        throw lastError;
+      }
     }
   }
 }

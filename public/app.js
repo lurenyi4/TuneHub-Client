@@ -49,6 +49,14 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
             loadPlayHistory();
         } else if (tabName === 'playlist') {
             renderPlaylistHistory();
+        } else if (tabName === 'downloads') {
+            loadDownloadTasks();
+            startDownloadPolling();
+        }
+        
+        // 如果离开下载标签页，停止轮询
+        if (tabName !== 'downloads') {
+            stopDownloadPolling();
         }
     });
 });
@@ -1511,6 +1519,87 @@ playerQuality.addEventListener('change', () => {
         }
     }
 });
+
+// 下载管理功能
+const downloadTasksContainer = document.getElementById('download-tasks-container');
+const refreshDownloadsBtn = document.getElementById('refresh-downloads-btn');
+let downloadPollingInterval = null;
+
+if (refreshDownloadsBtn) {
+    refreshDownloadsBtn.addEventListener('click', () => {
+        loadDownloadTasks();
+    });
+}
+
+async function loadDownloadTasks() {
+    if (!downloadTasksContainer) return;
+    
+    try {
+        const data = await safeFetch(`${API_BASE}/api/download/tasks`);
+        if (data.code === 200 && data.data) {
+            renderDownloadTasks(data.data);
+        }
+    } catch (error) {
+        console.error('获取下载任务失败:', error);
+    }
+}
+
+function renderDownloadTasks(tasks) {
+    if (!downloadTasksContainer) return;
+    
+    if (tasks.length === 0) {
+        downloadTasksContainer.innerHTML = '<div class="empty-state">暂无下载任务</div>';
+        return;
+    }
+    
+    // 按开始时间倒序排序
+    tasks.sort((a, b) => b.startTime - a.startTime);
+    
+    downloadTasksContainer.innerHTML = tasks.map(task => {
+        const progress = task.progress || 0;
+        const statusText = getStatusText(task.status);
+        const statusClass = task.status;
+        
+        return `
+            <div class="download-task-item">
+                <div class="task-info">
+                    <div class="task-name">${escapeHtml(task.name || '未知歌曲')}</div>
+                    <div class="task-artist">${escapeHtml(task.artist || '未知歌手')}</div>
+                </div>
+                <div class="task-progress-container">
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill ${statusClass}" style="width: ${progress}%"></div>
+                    </div>
+                    <div class="progress-text">${progress}%</div>
+                </div>
+                <div class="task-status ${statusClass}">${statusText}</div>
+                ${task.error ? `<div class="task-error">${escapeHtml(task.error)}</div>` : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+function getStatusText(status) {
+    const texts = {
+        'pending': '等待中',
+        'downloading': '下载中',
+        'completed': '已完成',
+        'failed': '失败'
+    };
+    return texts[status] || status;
+}
+
+function startDownloadPolling() {
+    if (downloadPollingInterval) return;
+    downloadPollingInterval = setInterval(loadDownloadTasks, 2000);
+}
+
+function stopDownloadPolling() {
+    if (downloadPollingInterval) {
+        clearInterval(downloadPollingInterval);
+        downloadPollingInterval = null;
+    }
+}
 
 // 统计功能
 const refreshStatsBtn = document.getElementById('refresh-stats-btn');
