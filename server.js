@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const storageUtils = require('./storage-utils');
 const historyUtils = require('./history-utils');
+const playlistHistoryUtils = require('./playlist-history-utils');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,6 +17,24 @@ app.use(cors());
 app.use(express.json({ limit: '500mb' }));
 app.use(express.urlencoded({ extended: true, limit: '500mb' }));
 app.use(express.static('public'));
+app.use('/storage', express.static(storageUtils.STORAGE_DIR));
+
+// 获取本地库列表
+app.get('/api/local/library', (req, res) => {
+  try {
+    const library = storageUtils.scanLibrary();
+    res.json({
+      code: 200,
+      data: library
+    });
+  } catch (error) {
+    res.status(500).json({
+      code: 500,
+      message: error.message,
+      data: null
+    });
+  }
+});
 
 // API 代理路由
 app.get('/api/proxy/info', async (req, res) => {
@@ -62,7 +81,6 @@ app.get('/api/proxy/url', async (req, res) => {
         quality
       );
       if (localPath) {
-        console.log(`使用本地缓存: ${source}/${songInfo.artist}/${songInfo.album}/${songInfo.name}`);
         return res.sendFile(localPath);
       }
     }
@@ -81,26 +99,24 @@ app.get('/api/proxy/url', async (req, res) => {
       const location = response.headers.location;
       const sourceSwitch = response.headers['x-source-switch'];
       
-      // 异步下载并保存文件（不阻塞响应）
+      if (sourceSwitch) {
+        res.set('X-Source-Switch', sourceSwitch);
+      }
+      
+      // 使用流式代理并保存（边下边播）
+      // 计算保存路径
+      let savePath = null;
       if (songInfo) {
-        storageUtils.downloadAndSaveSong(
+        savePath = storageUtils.getSongStoragePath(
           source, 
           songInfo.artist || '未知歌手', 
           songInfo.album || '未知专辑', 
           songInfo.name || '未知歌曲', 
-          quality, 
-          location
-        ).then(savedPath => {
-          console.log(`音乐文件已保存: ${savedPath}`);
-        }).catch(err => {
-          console.error('保存音乐文件失败:', err.message);
-        });
+          quality
+        );
       }
       
-      if (sourceSwitch) {
-        res.set('X-Source-Switch', sourceSwitch);
-      }
-      res.redirect(location);
+      await storageUtils.streamAndSaveSong(req, res, location, savePath);
     } else {
       res.json(response.data);
     }
@@ -110,34 +126,31 @@ app.get('/api/proxy/url', async (req, res) => {
       const sourceSwitch = error.response.headers['x-source-switch'];
       const quality = req.query.br || '320k';
       
-      // 尝试获取歌曲信息并保存
+      if (sourceSwitch) {
+        res.set('X-Source-Switch', sourceSwitch);
+      }
+      
+      // 尝试获取歌曲信息以计算保存路径
+      let savePath = null;
       try {
         const infoResponse = await axios.get(`${API_BASE_URL}/api/`, {
           params: { source: req.query.source, id: req.query.id, type: 'info' }
         });
         if (infoResponse.data && infoResponse.data.code === 200 && infoResponse.data.data) {
           const songInfo = infoResponse.data.data;
-          storageUtils.downloadAndSaveSong(
+          savePath = storageUtils.getSongStoragePath(
             req.query.source, 
             songInfo.artist || '未知歌手', 
             songInfo.album || '未知专辑', 
             songInfo.name || '未知歌曲', 
-            quality, 
-            location
-          ).then(savedPath => {
-            console.log(`音乐文件已保存: ${savedPath}`);
-          }).catch(err => {
-            console.error('保存音乐文件失败:', err.message);
-          });
+            quality
+          );
         }
       } catch (err) {
         console.error('获取歌曲信息失败:', err.message);
       }
       
-      if (sourceSwitch) {
-        res.set('X-Source-Switch', sourceSwitch);
-      }
-      res.redirect(location);
+      await storageUtils.streamAndSaveSong(req, res, location, savePath);
     } else {
       res.status(500).json({ 
         code: 500, 
@@ -174,7 +187,6 @@ app.get('/api/proxy/pic', async (req, res) => {
         songInfo.name || '未知歌曲'
       );
       if (localCover) {
-        console.log(`使用本地封面缓存: ${source}/${songInfo.artist}/${songInfo.album}/${songInfo.name}`);
         return res.sendFile(localCover);
       }
     }
@@ -203,7 +215,20 @@ app.get('/api/proxy/pic', async (req, res) => {
         });
       }
       
-      res.redirect(location);
+      return res.redirect(location);
+    } else if (response.data && response.data.code === 200 && response.data.data) {
+      // 如果 API 直接返回了封面 URL 而不是重定向
+      const location = response.data.data;
+      if (songInfo && location) {
+        storageUtils.downloadAndSaveCover(
+          source, 
+          songInfo.artist || '未知歌手', 
+          songInfo.album || '未知专辑', 
+          songInfo.name || '未知歌曲', 
+          location
+        ).catch(err => console.error('保存专辑封面失败:', err.message));
+      }
+      return res.redirect(location);
     } else {
       res.json(response.data);
     }
@@ -271,7 +296,6 @@ app.get('/api/proxy/lrc', async (req, res) => {
         songInfo.name || '未知歌曲'
       );
       if (localLyrics) {
-        console.log(`使用本地歌词缓存: ${source}/${songInfo.artist}/${songInfo.album}/${songInfo.name}`);
         res.set('Content-Type', 'text/plain; charset=utf-8');
         return res.send(localLyrics);
       }
@@ -577,10 +601,11 @@ app.get('/api/storage/stats', async (req, res) => {
                 const stats = fs.statSync(filePath);
                 platformSize += stats.size;
                 
-                if (file === 'lyrics.lrc') {
+                const safeSongName = storageUtils.sanitizeFileName(songId);
+                if (file === `${safeSongName}.lrc`) {
                   hasLyrics = true;
                   totalLyrics++;
-                } else if (file.endsWith('.mp3') || file.endsWith('.flac')) {
+                } else if (file.startsWith(safeSongName) && (file.endsWith('.mp3') || file.endsWith('.flac'))) {
                   hasSong = true;
                 }
               });
@@ -864,6 +889,103 @@ app.delete('/api/history', (req, res) => {
   }
 });
 
+// 歌单历史 API
+app.get('/api/playlist-history', (req, res) => {
+  try {
+    const history = playlistHistoryUtils.getPlaylistHistory();
+    res.json({
+      code: 200,
+      data: history
+    });
+  } catch (error) {
+    res.status(500).json({
+      code: 500,
+      message: error.message,
+      data: null
+    });
+  }
+});
+
+app.post('/api/playlist-history', express.json(), (req, res) => {
+  try {
+    const { platform, id, name, author } = req.body;
+    if (!platform || !id) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数',
+        data: null
+      });
+    }
+    
+    const success = playlistHistoryUtils.addToPlaylistHistory(platform, id, name || '', author || '');
+    if (success) {
+      res.json({
+        code: 200,
+        message: '添加成功',
+        data: null
+      });
+    } else {
+      res.status(500).json({
+        code: 500,
+        message: '添加失败',
+        data: null
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      code: 500,
+      message: error.message,
+      data: null
+    });
+  }
+});
+
+app.delete('/api/playlist-history', (req, res) => {
+  try {
+    const { platform, id } = req.query;
+    
+    if (platform && id) {
+      // 删除单条记录
+      const success = playlistHistoryUtils.removePlaylistHistoryItem(platform, id);
+      if (success) {
+        res.json({
+          code: 200,
+          message: '删除成功',
+          data: null
+        });
+      } else {
+        res.status(500).json({
+          code: 500,
+          message: '删除失败',
+          data: null
+        });
+      }
+    } else {
+      // 清空所有记录
+      const success = playlistHistoryUtils.clearPlaylistHistory();
+      if (success) {
+        res.json({
+          code: 200,
+          message: '清空成功',
+          data: null
+        });
+      } else {
+        res.status(500).json({
+          code: 500,
+          message: '清空失败',
+          data: null
+        });
+      }
+    }
+  } catch (error) {
+    res.status(500).json({
+      code: 500,
+      message: error.message,
+      data: null
+    });
+  }
+});
+
 // 错误处理中间件（放在最后）
 app.use((error, req, res, next) => {
   if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
@@ -895,4 +1017,3 @@ app.use((error, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`TuneHub Client Server running on http://localhost:${PORT}`);
 });
-
