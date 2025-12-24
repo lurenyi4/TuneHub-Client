@@ -11,12 +11,15 @@
         <header>
             <h1>🎵 TuneHub</h1>
             <p class="subtitle">统一的音乐信息解析服务</p>
+            <button id="theme-toggle" class="theme-toggle" title="切换主题">🌓</button>
         </header>
 
         <nav class="tabs">
             <button class="tab-btn active" data-tab="search">搜索</button>
             <button class="tab-btn" data-tab="playlist">歌单</button>
+            <button class="tab-btn" data-tab="local">本地库</button>
             <button class="tab-btn" data-tab="history">播放历史</button>
+            <button class="tab-btn" data-tab="downloads">下载管理</button>
             <button class="tab-btn" data-tab="advanced">高级功能</button>
         </nav>
 
@@ -52,12 +55,31 @@
                     <input type="text" id="playlist-id" placeholder="输入歌单ID" />
                     <button id="load-playlist-btn">加载歌单</button>
                 </div>
+                
+                <!-- 歌单历史记录 -->
+                <div id="playlist-history" class="playlist-history" style="display: none;">
+                    <h4>最近加载的歌单</h4>
+                    <div id="playlist-history-list" class="playlist-history-list"></div>
+                </div>
+
                 <div id="playlist-info" class="playlist-info"></div>
                 <div id="playlist-actions" class="playlist-actions" style="display: none;">
                     <button id="save-all-songs-btn" class="save-all-btn">保存全部歌曲</button>
                     <div id="save-progress" class="save-progress" style="display: none;"></div>
                 </div>
                 <div id="playlist-results" class="results-container"></div>
+            </div>
+        </div>
+
+        <!-- 本地库标签页 -->
+        <div id="local-tab" class="tab-content">
+            <div class="local-section">
+                <div class="input-group">
+                    <input type="text" id="local-search-input" placeholder="搜索本地歌曲..." />
+                    <button id="refresh-local-btn">刷新列表</button>
+                </div>
+                <div id="local-stats" class="playlist-info"></div>
+                <div id="local-results" class="results-container"></div>
             </div>
         </div>
 
@@ -69,6 +91,19 @@
                     <button id="clear-history-btn" class="clear-btn">清空历史</button>
                 </div>
                 <div id="history-results" class="results-container"></div>
+            </div>
+        </div>
+
+        <!-- 下载管理标签页 -->
+        <div id="downloads-tab" class="tab-content">
+            <div class="section-header">
+                <h2>下载管理</h2>
+                <div class="header-actions">
+                    <button id="refresh-downloads-btn" class="secondary-btn">刷新状态</button>
+                </div>
+            </div>
+            <div id="download-tasks-container" class="download-tasks-container">
+                <div class="loading">正在获取下载任务...</div>
             </div>
         </div>
 
@@ -135,8 +170,29 @@
         </div>
     </div>
 
+    <!-- 全屏歌词界面 -->
+    <div id="full-screen-lyrics" class="full-screen-lyrics">
+        <div class="fs-lyrics-bg" id="fs-lyrics-bg"></div>
+        <div class="fs-lyrics-content">
+            <div class="fs-header">
+                <button id="close-fs-lyrics-btn" class="close-btn-large">×</button>
+            </div>
+            <div class="fs-main">
+                <div class="fs-cover-container">
+                    <img id="fs-cover" src="" alt="封面" />
+                </div>
+                <div class="fs-info">
+                    <h2 id="fs-song-name">未播放</h2>
+                    <p id="fs-song-artist">-</p>
+                    <div id="fs-lyrics-container" class="fs-lyrics-container"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 固定在底部的播放器 -->
     <div id="bottom-player" class="bottom-player">
+        <canvas id="visualizer-canvas"></canvas>
         <div class="player-content">
             <div class="player-left">
                 <img id="player-cover" class="player-cover" src="" alt="封面" />
@@ -152,7 +208,13 @@
                     <button id="next-btn" class="player-control-btn" title="下一首 (→)">⏭</button>
                     <button id="play-mode-btn" class="player-control-btn" title="播放模式">▶</button>
                 </div>
-                <audio id="audio-player" controls></audio>
+                <div class="player-progress-container">
+                    <span id="current-time" class="time-display">00:00</span>
+                    <input type="range" id="progress-bar" class="progress-bar" min="0" max="100" value="0" step="0.1">
+                    <span id="total-duration" class="time-display">00:00</span>
+                </div>
+                <div id="player-bar-lyrics" class="player-bar-lyrics"></div>
+                <audio id="audio-player" style="display: none;"></audio>
             </div>
             <div class="player-right">
                 <div class="volume-control">
@@ -166,7 +228,6 @@
                     <option value="flac24bit" selected>Hi-Res</option>
                 </select>
                 <button id="player-queue-btn" class="player-btn">队列</button>
-                <button id="player-lyrics-btn" class="player-btn">歌词</button>
             </div>
         </div>
         <div id="player-queue-panel" class="player-queue-panel">
@@ -179,16 +240,8 @@
             </div>
             <div id="queue-list" class="queue-list"></div>
         </div>
-        <div id="player-lyrics-panel" class="player-lyrics-panel">
-            <div class="lyrics-header">
-                <h3>歌词</h3>
-                <button id="close-lyrics-btn" class="close-btn">×</button>
-            </div>
-            <div id="player-lyrics-display" class="player-lyrics-display"></div>
-        </div>
     </div>
 
     <script src="app.js"></script>
 </body>
 </html>
-
